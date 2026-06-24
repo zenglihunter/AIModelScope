@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+*.spec
+build/
+dist/
+output/
+release/
+*.exe
+api_configs.json
+aimodelscope_models.csv
+.DS_Store
