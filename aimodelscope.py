@@ -83,6 +83,12 @@ class App:
         self._refresh_dropdown()
         if self.configs:
             self._select_config(0)
+        # 回调异常不再静默：弹窗提示，避免"点了没反应"难以排查
+        root.report_callback_exception = self._report_callback_exception
+
+    @staticmethod
+    def _report_callback_exception(exc_type, exc_value, exc_tb) -> None:
+        messagebox.showerror("程序异常", f"{exc_type.__name__}: {exc_value}")
 
     # ── UI ───────────────────────────────────────────────────────
 
