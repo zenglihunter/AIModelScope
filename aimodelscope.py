@@ -10,6 +10,9 @@ from tkinter import messagebox, ttk
 import customtkinter as ctk
 import requests
 
+APP_NAME = "AIModelScope"
+APP_VERSION = "1.1.0"
+
 CONFIG_FILE = "api_configs.json"
 SPEED_TEST_TOKENS = 100
 OPENROUTER_URL = "https://openrouter.ai/api/v1/models"
@@ -19,7 +22,7 @@ FONT_FAMILY = "Microsoft YaHei"
 FONT_UI = lambda size=13, bold=False: ctk.CTkFont(family=FONT_FAMILY, size=size, weight="bold" if bold else "normal")
 FONT_TREE = (FONT_FAMILY, 11)
 
-DEV_INFO = "需求 by Tiger | 开发 by DeepSeek V4 Pro | 更新: 2026-09-04"
+DEV_INFO = f"{APP_NAME} v{APP_VERSION} | 需求 by Tiger | 开发 by DeepSeek V4 Pro | 更新: 2026-09-04"
 
 STATUS_LABELS: dict[str, str] = {
     "ok": "可用的",
@@ -55,7 +58,7 @@ def mask_key(key: str) -> str:
 class App:
     def __init__(self, root: ctk.CTk) -> None:
         self.root = root
-        root.title("AIModelScope - AI模型管理器")
+        root.title(f"{APP_NAME} v{APP_VERSION} - AI模型管理器")
         root.geometry("1280x760")
         root.resizable(True, True)
         root.minsize(1000, 560)

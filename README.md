@@ -1,5 +1,7 @@
 # AIModelScope
 
+**当前版本：v1.1.0** · [更新日志](CHANGELOG.md)
+
 [English](#english) | [中文](#chinese)
 
 ---
@@ -14,8 +16,10 @@
 - **Multi-Provider** — Connect to any OpenAI-compatible API (OpenAI, Anthropic via proxy, Ollama, LM Studio, AxonHub, etc.)
 - **Model List** — Browse all available models with creation date and provider info
 - **Availability Test** — Batch test all models to check which ones are working (5 concurrent threads)
-- **Speed Test** — Measure token generation speed (tokens/second) with color-coded results
-- **CSV Export** — Export model list with status and speed data
+- **Speed Test** — Measure token generation speed (tokens/second) and time-to-first-token (TTFT)
+- **Filter & Search** — Filter by model ID / provider keyword, or show available models only
+- **Pricing & Limits** — Auto-fetch price (USD/1M tokens), context window and max output from OpenRouter (with models.dev fallback)
+- **CSV Export** — Export model list with status, speed, TTFT and pricing data
 - **API Config Management** — Save multiple API configurations securely on your local machine
 - **Sort & Filter** — Click column headers to sort ascending/descending
 
@@ -59,6 +63,7 @@ MIT License - see [LICENSE](LICENSE) file.
 
 - Built with [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter)
 - Powered by Python
+- Pricing data: [OpenRouter](https://openrouter.ai) and [models.dev](https://models.dev)
 
 ---
 
@@ -72,8 +77,10 @@ MIT License - see [LICENSE](LICENSE) file.
 - **多平台支持** — 连接任意 OpenAI 兼容 API（OpenAI、Anthropic 代理、Ollama、LM Studio、AxonHub 等）
 - **模型列表** — 浏览所有可用模型，显示创建日期和来源信息
 - **可用性检测** — 批量测试所有模型是否可用（5 线程并发）
-- **速度测试** — 测量 token 生成速度（tokens/s），颜色标注快慢
-- **导出 CSV** — 导出含状态和速度数据的模型列表
+- **速度测试** — 测量 token 生成速度（tokens/s）与首 token 延迟（TTFT），颜色标注快慢
+- **过滤与搜索** — 按模型 ID / 来源关键词过滤，或只看可用模型
+- **价格与规格** — 自动获取模型价格（$/1M tokens）、上下文长度、输出上限（数据源 OpenRouter，models.dev 补充）
+- **导出 CSV** — 导出含状态、速度、首 token 延迟、价格数据的模型列表
 - **API 配置管理** — 安全保存多个 API 配置在本地电脑
 - **排序** — 点击表头可升序/降序排列
 
@@ -117,3 +124,8 @@ MIT License - 详见 [LICENSE](LICENSE) 文件。
 
 - 基于 [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter) 构建
 - Python 驱动
+- 价格数据来源：[OpenRouter](https://openrouter.ai) 与 [models.dev](https://models.dev)
+
+### 更新日志
+
+详见 [CHANGELOG.md](CHANGELOG.md)
