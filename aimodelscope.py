@@ -72,6 +72,7 @@ class App:
         self.price_info: dict[str, dict] = {}
         self._dev_exact: dict[str, dict] | None = None
         self._dev_base: dict[str, list[dict]] | None = None
+        self._price_lower: dict[str, object] | None = None
         self._pricing_source: str = ""
         self._speed_lock = threading.Lock()
 
@@ -745,7 +746,11 @@ class App:
             for name, lst in suffix.items():
                 lst.sort(key=lambda t: (len(t[0]), t[0]))
                 exact.setdefault(name, lst[0][1])
-            self._dev_exact, self._dev_base = exact, None
+            # 小写索引：服务商返回的 ID 大小写五花八门（DeepSeek-V4-Flash vs deepseek-v4-flash）
+            lower: dict[str, dict] = {}
+            for k, v in exact.items():
+                lower.setdefault(k.lower(), v)
+            self._dev_exact, self._dev_base, self._price_lower = exact, None, lower
             self._pricing_source = "OpenRouter"
             self.root.after(0, self._apply_pricing)
             return
@@ -777,19 +782,30 @@ class App:
                     exact_md.setdefault(k, []).append(info)
                 base.setdefault(mid.split("/")[-1], []).append(info)
         self._dev_exact, self._dev_base = exact_md, base
+        lower_md: dict[str, list[dict]] = {}
+        for k, v in exact_md.items():
+            lower_md.setdefault(k.lower(), v)
+        self._price_lower = lower_md
         self._pricing_source = "models.dev（中位数）"
         self.root.after(0, self._apply_pricing)
 
     def _lookup_dev_info(self, mid: str) -> dict | None:
         if self._dev_exact is None:
             return None
+        # 精确 → 小写 → 去厂商前缀 → 前缀小写，逐级放宽
         if self._pricing_source.startswith("OpenRouter"):
-            info = self._dev_exact.get(mid)
+            info = (self._dev_exact.get(mid)
+                    or (self._price_lower or {}).get(mid.lower()))
             if info is None and "/" in mid:
-                info = self._dev_exact.get(mid.split("/")[-1])
+                bare = mid.split("/")[-1]
+                info = self._dev_exact.get(bare) or (self._price_lower or {}).get(bare.lower())
             return info
         # models.dev：同名模型被多家服务商收录时，各字段取中位数，避免随机匹配到偏离值
-        candidates = self._dev_exact.get(mid) or self._dev_base.get(mid.split("/")[-1], [])
+        lower_md = self._price_lower or {}
+        candidates = (self._dev_exact.get(mid)
+                      or lower_md.get(mid.lower())
+                      or self._dev_base.get(mid.split("/")[-1], [])
+                      or lower_md.get(mid.split("/")[-1].lower(), []))
         if not candidates:
             return None
         if len(candidates) == 1:
