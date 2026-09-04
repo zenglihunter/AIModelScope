@@ -12,6 +12,7 @@ import requests
 
 CONFIG_FILE = "api_configs.json"
 SPEED_TEST_TOKENS = 100
+OPENROUTER_URL = "https://openrouter.ai/api/v1/models"
 MODELS_DEV_URL = "https://models.dev/api.json"
 
 FONT_FAMILY = "Microsoft YaHei"
@@ -71,6 +72,7 @@ class App:
         self.price_info: dict[str, dict] = {}
         self._dev_exact: dict[str, dict] | None = None
         self._dev_base: dict[str, list[dict]] | None = None
+        self._pricing_source: str = ""
         self._speed_lock = threading.Lock()
 
         self._build_ui()
@@ -718,15 +720,47 @@ class App:
         threading.Thread(target=self._pricing_worker, daemon=True).start()
 
     def _pricing_worker(self) -> None:
+        # 首选 OpenRouter：单一权威口径，每个模型一条标准定价
         try:
-            resp = requests.get(MODELS_DEV_URL, timeout=60)
+            resp = requests.get(OPENROUTER_URL, headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
+            resp.raise_for_status()
+            exact: dict[str, dict] = {}
+            suffix: dict[str, list[tuple[str, dict]]] = {}
+            for m in resp.json().get("data", []):
+                pricing = m.get("pricing") or {}
+                top = m.get("top_provider") or {}
+                try:
+                    ci = float(pricing.get("prompt") or 0) * 1e6   # OpenRouter 单价为 $/token，换算成 $/1M
+                    co = float(pricing.get("completion") or 0) * 1e6
+                except (TypeError, ValueError):
+                    ci = co = None
+                mid = m.get("id") or ""
+                if not mid:
+                    continue
+                info = {"context": m.get("context_length"), "output": top.get("max_completion_tokens"),
+                        "cost_in": ci, "cost_out": co}
+                exact[mid] = info
+                suffix.setdefault(mid.split("/")[-1], []).append((mid, info))
+            # 裸 ID（无厂商前缀）匹配时，取 ID 最短的条目（通常是官方/规范收录）
+            for name, lst in suffix.items():
+                lst.sort(key=lambda t: (len(t[0]), t[0]))
+                exact.setdefault(name, lst[0][1])
+            self._dev_exact, self._dev_base = exact, None
+            self._pricing_source = "OpenRouter"
+            self.root.after(0, self._apply_pricing)
+            return
+        except (requests.exceptions.RequestException, ValueError):
+            pass  # OpenRouter 不可达时回退到 models.dev
+
+        try:
+            resp = requests.get(MODELS_DEV_URL, headers={"User-Agent": "Mozilla/5.0"}, timeout=60)
             resp.raise_for_status()
             data = resp.json()
         except (requests.exceptions.RequestException, ValueError) as e:
-            self.root.after(0, messagebox.showerror, "错误", f"获取 models.dev 价格失败:\n{e}")
+            self.root.after(0, messagebox.showerror, "错误", f"获取价格失败（OpenRouter 和 models.dev 均不可达）:\n{e}")
             self.root.after(0, lambda: self.status_lbl.configure(text="价格获取失败"))
             return
-        exact: dict[str, list[dict]] = {}
+        exact_md: dict[str, list[dict]] = {}
         base: dict[str, list[dict]] = {}
         for prov in data.values():
             for key, m in (prov.get("models") or {}).items():
@@ -740,15 +774,21 @@ class App:
                 }
                 mid = m.get("id") or key
                 for k in {mid, key}:
-                    exact.setdefault(k, []).append(info)
+                    exact_md.setdefault(k, []).append(info)
                 base.setdefault(mid.split("/")[-1], []).append(info)
-        self._dev_exact, self._dev_base = exact, base
+        self._dev_exact, self._dev_base = exact_md, base
+        self._pricing_source = "models.dev（中位数）"
         self.root.after(0, self._apply_pricing)
 
     def _lookup_dev_info(self, mid: str) -> dict | None:
-        """同名模型被多家服务商收录时，各字段取中位数，避免随机匹配到偏离值。"""
         if self._dev_exact is None:
             return None
+        if self._pricing_source.startswith("OpenRouter"):
+            info = self._dev_exact.get(mid)
+            if info is None and "/" in mid:
+                info = self._dev_exact.get(mid.split("/")[-1])
+            return info
+        # models.dev：同名模型被多家服务商收录时，各字段取中位数，避免随机匹配到偏离值
         candidates = self._dev_exact.get(mid) or self._dev_base.get(mid.split("/")[-1], [])
         if not candidates:
             return None
@@ -787,7 +827,8 @@ class App:
         self._render_rows()
         total = len(self.models)
         self.status_lbl.configure(text="价格匹配完成")
-        self.stats_lbl.configure(text=f"共 {total} 个模型 | 价格已匹配 {matched}/{total}（数据来源 models.dev，单位 $/1M tokens）")
+        source = self._pricing_source or "OpenRouter"
+        self.stats_lbl.configure(text=f"共 {total} 个模型 | 价格已匹配 {matched}/{total}（数据来源 {source}，单位 $/1M tokens）")
 
     @staticmethod
     def _fmt_price(info: dict) -> str:
