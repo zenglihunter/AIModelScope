@@ -12,12 +12,13 @@ import requests
 
 CONFIG_FILE = "api_configs.json"
 SPEED_TEST_TOKENS = 100
+MODELS_DEV_URL = "https://models.dev/api.json"
 
 FONT_FAMILY = "Microsoft YaHei"
 FONT_UI = lambda size=13, bold=False: ctk.CTkFont(family=FONT_FAMILY, size=size, weight="bold" if bold else "normal")
 FONT_TREE = (FONT_FAMILY, 11)
 
-DEV_INFO = "需求 by Tiger | 开发 by DeepSeek V4 Pro | 更新: 2026-06-24"
+DEV_INFO = "需求 by Tiger | 开发 by DeepSeek V4 Pro | 更新: 2026-09-04"
 
 STATUS_LABELS: dict[str, str] = {
     "ok": "可用的",
@@ -54,9 +55,9 @@ class App:
     def __init__(self, root: ctk.CTk) -> None:
         self.root = root
         root.title("AIModelScope - AI模型管理器")
-        root.geometry("960x720")
+        root.geometry("1280x760")
         root.resizable(True, True)
-        root.minsize(780, 520)
+        root.minsize(1000, 560)
 
         ctk.set_appearance_mode("light")
         ctk.set_default_color_theme("blue")
@@ -66,6 +67,10 @@ class App:
         self.models: list[dict] = []
         self.statuses: dict[str, str] = {}
         self.speeds: dict[str, float] = {}
+        self.ttfts: dict[str, float] = {}
+        self.price_info: dict[str, dict] = {}
+        self._dev_exact: dict[str, dict] | None = None
+        self._dev_base: dict[str, list[dict]] | None = None
         self._speed_lock = threading.Lock()
 
         self._build_ui()
@@ -129,11 +134,29 @@ class App:
                       font=FONT_UI(13, True), fg_color="#2563eb", hover_color="#1d4ed8", text_color="white").pack(side=tk.LEFT, padx=(0, 6))
         ctk.CTkButton(toolbar, text="导出CSV", command=self.export_csv, width=90,
                       font=FONT_UI(13, True), fg_color="#27ae60", hover_color="#1e8449", text_color="white").pack(side=tk.LEFT, padx=(0, 6))
+        ctk.CTkButton(toolbar, text="价格 (models.dev)", command=self.fetch_pricing, width=140,
+                      font=FONT_UI(13, True), fg_color="#7c3aed", hover_color="#6d28d9", text_color="white").pack(side=tk.LEFT, padx=(0, 6))
         self.progress = ctk.CTkProgressBar(toolbar, width=180)
         self.progress.pack(side=tk.LEFT, padx=12)
         self.progress.set(0)
         self.status_lbl = ctk.CTkLabel(toolbar, text="", font=FONT_UI())
         self.status_lbl.pack(side=tk.LEFT)
+
+        # ── filter row ──
+        filter_row = ctk.CTkFrame(self.root, fg_color="transparent")
+        filter_row.pack(fill=tk.X, padx=12, pady=(6, 0))
+        ctk.CTkLabel(filter_row, text="搜索:", font=FONT_UI()).pack(side=tk.LEFT)
+        self.search_var = tk.StringVar()
+        self.search_entry = ctk.CTkEntry(filter_row, textvariable=self.search_var, width=260,
+                                         font=FONT_UI(), placeholder_text="模型 ID / 来源...")
+        self.search_entry.pack(side=tk.LEFT, padx=(5, 12))
+        self.search_entry.bind("<KeyRelease>", lambda e: self._render_rows())
+        self.only_ok_var = tk.BooleanVar(value=False)
+        ctk.CTkCheckBox(filter_row, text="只看可用", variable=self.only_ok_var,
+                        command=self._render_rows, font=FONT_UI()).pack(side=tk.LEFT)
+        ctk.CTkButton(filter_row, text="清除", width=50, fg_color="transparent", border_width=1,
+                      text_color=("gray30", "gray70"), hover_color=("gray85", "gray25"),
+                      command=self._clear_filter, font=FONT_UI(12)).pack(side=tk.LEFT, padx=12)
 
         # ── tree + scrollbar ──
         tree_frame = ctk.CTkFrame(self.root)
@@ -141,23 +164,35 @@ class App:
 
         self._sort_col: str = ""
         self._sort_asc: bool = True
-        columns = ("id", "created_date", "owned_by", "status", "speed")
+        columns = ("id", "created_date", "owned_by", "status", "speed", "ttft", "price", "context", "output")
         self.tree = ttk.Treeview(tree_frame, columns=columns, show="headings", selectmode="extended")
         self.tree.heading("id", text="模型 ID", command=lambda: self._sort_by("id"))
         self.tree.heading("created_date", text="创建日期", command=lambda: self._sort_by("created_date"))
         self.tree.heading("owned_by", text="来源", command=lambda: self._sort_by("owned_by"))
         self.tree.heading("status", text="状态", command=lambda: self._sort_by("status"))
         self.tree.heading("speed", text="速度", command=lambda: self._sort_by("speed"))
-        self.tree.column("id", width=300)
-        self.tree.column("created_date", width=140, anchor=tk.CENTER)
-        self.tree.column("owned_by", width=90, anchor=tk.CENTER)
-        self.tree.column("status", width=90, anchor=tk.CENTER)
-        self.tree.column("speed", width=110, anchor=tk.CENTER)
+        self.tree.heading("ttft", text="首token", command=lambda: self._sort_by("ttft"))
+        self.tree.heading("price", text="价格 $/1M", command=lambda: self._sort_by("price"))
+        self.tree.heading("context", text="上下文", command=lambda: self._sort_by("context"))
+        self.tree.heading("output", text="输出上限", command=lambda: self._sort_by("output"))
+        self.tree.column("id", width=280)
+        self.tree.column("created_date", width=130, anchor=tk.CENTER)
+        self.tree.column("owned_by", width=80, anchor=tk.CENTER)
+        self.tree.column("status", width=80, anchor=tk.CENTER)
+        self.tree.column("speed", width=90, anchor=tk.CENTER)
+        self.tree.column("ttft", width=70, anchor=tk.CENTER)
+        self.tree.column("price", width=100, anchor=tk.CENTER)
+        self.tree.column("context", width=80, anchor=tk.CENTER)
+        self.tree.column("output", width=80, anchor=tk.CENTER)
 
         v_scroll = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.tree.yview)
-        self.tree.configure(yscrollcommand=v_scroll.set)
-        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        v_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        h_scroll = ttk.Scrollbar(tree_frame, orient=tk.HORIZONTAL, command=self.tree.xview)
+        self.tree.configure(yscrollcommand=v_scroll.set, xscrollcommand=h_scroll.set)
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        v_scroll.grid(row=0, column=1, sticky="ns")
+        h_scroll.grid(row=1, column=0, sticky="ew")
+        tree_frame.grid_rowconfigure(0, weight=1)
+        tree_frame.grid_columnconfigure(0, weight=1)
 
         # right-click menu
         self.ctx_menu = tk.Menu(self.root, tearoff=0)
@@ -178,6 +213,9 @@ class App:
         self.tree.tag_configure("speed_fast", foreground="green")
         self.tree.tag_configure("speed_medium", foreground="#CC8800")
         self.tree.tag_configure("speed_slow", foreground="red")
+        self.tree.tag_configure("ttft_fast", foreground="green")
+        self.tree.tag_configure("ttft_medium", foreground="#CC8800")
+        self.tree.tag_configure("ttft_slow", foreground="red")
 
     # ── config management ────────────────────────────────────────
 
@@ -311,22 +349,86 @@ class App:
         self.models.clear()
         self.statuses.clear()
         self.speeds.clear()
+        self.ttfts.clear()
         self.status_lbl.configure(text="获取中...")
         self.root.update_idletasks()
         try:
             resp = requests.get(f"{self._api_url()}/models", headers=self._headers(), timeout=30)
             resp.raise_for_status()
             self.models = resp.json().get("data", [])
-            for m in self.models:
-                mid = m.get("id", "")
-                ts = m.get("created", 0)
-                d = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S") if ts else ""
-                self.tree.insert("", tk.END, iid=mid, values=(mid, d, m.get("owned_by", ""), "", ""))
+            self._render_rows()
             self.status_lbl.configure(text=f"共 {len(self.models)} 个模型")
             self.stats_lbl.configure(text=f"共 {len(self.models)} 个模型 | 可用性未测试")
         except requests.exceptions.RequestException as e:
             messagebox.showerror("错误", f"获取模型失败:\n{e}")
             self.status_lbl.configure(text="失败")
+
+    # ── filter & render ──────────────────────────────────────────
+
+    def _clear_filter(self) -> None:
+        self.search_var.set("")
+        self.only_ok_var.set(False)
+        self._render_rows()
+
+    def _matches_filter(self, mid: str, m: dict) -> bool:
+        kw = self.search_var.get().strip().lower()
+        if kw and kw not in mid.lower() and kw not in m.get("owned_by", "").lower():
+            return False
+        if self.only_ok_var.get() and self.statuses.get(mid) != "ok":
+            return False
+        return True
+
+    @staticmethod
+    def _speed_tag(tps: float) -> str:
+        if tps >= 50:
+            return "speed_fast"
+        if tps >= 20:
+            return "speed_medium"
+        return "speed_slow"
+
+    @staticmethod
+    def _ttft_tag(ttft: float) -> str:
+        if ttft <= 1.0:
+            return "ttft_fast"
+        if ttft <= 2.5:
+            return "ttft_medium"
+        return "ttft_slow"
+
+    def _row_values(self, m: dict) -> tuple:
+        mid = m.get("id", "")
+        ts = m.get("created", 0)
+        d = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S") if ts else ""
+        status = self.statuses.get(mid, "")
+        speed = self.speeds.get(mid)
+        if isinstance(speed, float) and speed > 0:
+            speed_lbl = f"{speed:.1f} tok/s"
+        elif mid in self.speeds:
+            speed_lbl = "失败"
+        else:
+            speed_lbl = ""
+        ttft = self.ttfts.get(mid)
+        ttft_lbl = f"{ttft:.2f}s" if isinstance(ttft, float) and ttft > 0 else ""
+        info = self.price_info.get(mid)
+        price_lbl = self._fmt_price(info) if info else ""
+        ctx_lbl = self._fmt_tokens(info.get("context")) if info and info.get("context") else ""
+        out_lbl = self._fmt_tokens(info.get("output")) if info and info.get("output") else ""
+        return (mid, d, m.get("owned_by", ""), STATUS_LABELS.get(status, status),
+                speed_lbl, ttft_lbl, price_lbl, ctx_lbl, out_lbl)
+
+    def _render_rows(self) -> None:
+        self.tree.delete(*self.tree.get_children())
+        for m in self.models:
+            mid = m.get("id", "")
+            if not self._matches_filter(mid, m):
+                continue
+            tags = []
+            s = self.speeds.get(mid)
+            if isinstance(s, float) and s > 0:
+                tags.append(self._speed_tag(s))
+            t = self.ttfts.get(mid)
+            if isinstance(t, float) and t > 0:
+                tags.append(self._ttft_tag(t))
+            self.tree.insert("", tk.END, iid=mid, values=self._row_values(m), tags=tuple(tags))
 
     # ── availability test ────────────────────────────────────────
 
@@ -393,6 +495,7 @@ class App:
         total = len(self.models)
         self.status_lbl.configure(text="测试完成")
         self.stats_lbl.configure(text=f"共 {total} 个模型 | 可用 {ok} | 不可用 {total - ok}")
+        self._render_rows()
 
     # ── speed test ───────────────────────────────────────────────
 
@@ -407,28 +510,83 @@ class App:
         total = len(model_ids)
         for i, mid in enumerate(model_ids):
             self.root.after(0, self.progress.set, (i + 1) / total)
-            self.root.after(0, lambda m=mid: self.tree.set(m, "speed", "测速中..."))
+            self.root.after(0, lambda m=mid: self._set_speed(m, "测速中...", "", "-", ""))
             self.root.after(0, self.status_lbl.configure, f"测速中... {i + 1}/{total}")
-            tps, elapsed = self._speed_test_one(mid)
+            tps, ttft, elapsed = self._speed_test_one(mid)
             with self._speed_lock:
                 self.speeds[mid] = tps
-            label = f"{tps:.1f} tok/s"
-            if tps >= 50:
-                tag = "speed_fast"
-            elif tps >= 20:
-                tag = "speed_medium"
+                self.ttfts[mid] = ttft
+            if tps > 0:
+                label = f"{tps:.1f} tok/s"
+                tag = self._speed_tag(tps)
             else:
-                tag = "speed_slow"
-            if tps == 0:
                 label = "失败"
                 tag = "speed_slow"
-            self.root.after(0, lambda m=mid, l=label, t=tag: self._set_speed(m, l, t))
+            ttft_label = f"{ttft:.2f}s" if ttft > 0 else "-"
+            ttft_tag = self._ttft_tag(ttft) if ttft > 0 else ""
+            self.root.after(0, lambda m=mid, l=label, t=tag, tl=ttft_label, tt=ttft_tag:
+                            self._set_speed(m, l, t, tl, tt))
         self.root.after(0, self.progress.set, 0)
         self.root.after(0, self.status_lbl.configure, "测速完成")
 
-    def _speed_test_one(self, model_id: str) -> tuple[float, float]:
+    def _speed_test_one(self, model_id: str) -> tuple[float, float, float]:
+        """流式请求测速：返回 (tokens/s, 首token延迟TTFT秒, 总耗时秒)。失败返回 (0, 0, elapsed)。"""
         api_url = self._api_url()
         headers = self._headers()
+        start = time.time()
+        try:
+            with requests.post(
+                f"{api_url}/chat/completions",
+                headers=headers,
+                json={
+                    "model": model_id,
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "max_tokens": SPEED_TEST_TOKENS,
+                    "stream": True,
+                    "stream_options": {"include_usage": True},
+                },
+                timeout=120,
+                stream=True,
+            ) as resp:
+                if resp.status_code != 200 or "text/event-stream" not in resp.headers.get("Content-Type", ""):
+                    resp.close()
+                    return self._speed_test_one_nostream(model_id, api_url, headers)
+                ttft: float | None = None
+                completion_tokens = 0
+                content_chunks = 0
+                for raw in resp.iter_lines():
+                    if not raw:
+                        continue
+                    line = raw.decode("utf-8", "ignore") if isinstance(raw, bytes) else raw
+                    if not line.startswith("data:"):
+                        continue
+                    payload = line[5:].strip()
+                    if payload == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(payload)
+                    except json.JSONDecodeError:
+                        continue
+                    choices = chunk.get("choices") or []
+                    if choices:
+                        delta = choices[0].get("delta") or {}
+                        if delta.get("content") or delta.get("reasoning_content"):
+                            if ttft is None:
+                                ttft = time.time() - start
+                            content_chunks += 1
+                    usage = chunk.get("usage")
+                    if usage:
+                        completion_tokens = usage.get("completion_tokens") or 0
+                elapsed = time.time() - start
+            if completion_tokens <= 0:
+                completion_tokens = content_chunks  # 服务端未返回 usage 时按内容块数估算
+            speed = completion_tokens / elapsed if elapsed > 0 and completion_tokens > 0 else 0
+            return speed, (ttft if ttft is not None else 0.0), elapsed
+        except requests.exceptions.RequestException:
+            return 0, 0.0, time.time() - start
+
+    def _speed_test_one_nostream(self, model_id: str, api_url: str, headers: dict[str, str]) -> tuple[float, float, float]:
+        """不支持流式输出的接口走非流式测速，TTFT 未知记 0。"""
         start = time.time()
         try:
             resp = requests.post(
@@ -443,18 +601,19 @@ class App:
             )
             elapsed = time.time() - start
             if resp.status_code == 200:
-                body = resp.json()
-                completion_tokens = body.get("usage", {}).get("completion_tokens", 0)
-                speed = completion_tokens / elapsed if elapsed > 0 else 0
-                return speed, elapsed
-            return 0, elapsed
+                completion_tokens = resp.json().get("usage", {}).get("completion_tokens", 0)
+                speed = completion_tokens / elapsed if elapsed > 0 and completion_tokens else 0
+                return speed, 0.0, elapsed
+            return 0, 0.0, elapsed
         except requests.exceptions.RequestException:
-            return 0, time.time() - start
+            return 0, 0.0, time.time() - start
 
-    def _set_speed(self, model_id: str, label: str, tag: str) -> None:
+    def _set_speed(self, model_id: str, speed_label: str, speed_tag: str, ttft_label: str, ttft_tag: str) -> None:
         if self.tree.exists(model_id):
-            self.tree.set(model_id, "speed", label)
-            self.tree.item(model_id, tags=(tag,))
+            self.tree.set(model_id, "speed", speed_label)
+            self.tree.set(model_id, "ttft", ttft_label)
+            tags = [t for t in (speed_tag, ttft_tag) if t]
+            self.tree.item(model_id, tags=tuple(tags))
 
     # ── context menu ─────────────────────────────────────────────
 
@@ -484,7 +643,8 @@ class App:
             self._sort_col = col
             self._sort_asc = True
 
-        for c in ("id", "created_date", "owned_by", "status", "speed"):
+        all_cols = ("id", "created_date", "owned_by", "status", "speed", "ttft", "price", "context", "output")
+        for c in all_cols:
             text = self.tree.heading(c)["text"].rstrip(" ▲▼")
             if c == col:
                 text += " ▲" if self._sort_asc else " ▼"
@@ -497,6 +657,10 @@ class App:
             "owned_by": str,
             "status": str,
             "speed": self._speed_sort_key,
+            "ttft": self._ttft_sort_key,
+            "price": self._price_sort_key,
+            "context": self._size_sort_key,
+            "output": self._size_sort_key,
         }
         key_fn = key_map.get(col, str)
         items.sort(key=lambda iid: key_fn(self.tree.set(iid, col)), reverse=not self._sort_asc)
@@ -510,6 +674,126 @@ class App:
         except (ValueError, IndexError):
             return -1.0
 
+    @staticmethod
+    def _ttft_sort_key(val: str) -> float:
+        try:
+            return float(val.rstrip("s"))
+        except ValueError:
+            return 1e9  # 未测的排到最后
+
+    @staticmethod
+    def _price_sort_key(val: str) -> float:
+        v = val.strip()
+        if v == "免费":
+            return 0.0
+        if not v.startswith("$"):
+            return -1.0
+        try:
+            return float(v[1:].split("/")[0])
+        except ValueError:
+            return -1.0
+
+    @staticmethod
+    def _size_sort_key(val: str) -> float:
+        v = val.strip()
+        if v.endswith("M"):
+            return float(v[:-1]) * 1_000_000
+        if v.endswith("K"):
+            return float(v[:-1]) * 1000
+        try:
+            return float(v)
+        except ValueError:
+            return -1.0
+
+    # ── pricing (models.dev) ─────────────────────────────────────
+
+    def fetch_pricing(self) -> None:
+        if self._dev_exact is not None:
+            self._apply_pricing()
+            return
+        if not self.models:
+            messagebox.showwarning("提示", "请先获取模型列表")
+            return
+        self.status_lbl.configure(text="获取价格信息中...")
+        threading.Thread(target=self._pricing_worker, daemon=True).start()
+
+    def _pricing_worker(self) -> None:
+        try:
+            resp = requests.get(MODELS_DEV_URL, timeout=60)
+            resp.raise_for_status()
+            data = resp.json()
+        except (requests.exceptions.RequestException, ValueError) as e:
+            self.root.after(0, messagebox.showerror, "错误", f"获取 models.dev 价格失败:\n{e}")
+            self.root.after(0, lambda: self.status_lbl.configure(text="价格获取失败"))
+            return
+        exact: dict[str, dict] = {}
+        base: dict[str, list[dict]] = {}
+        for prov in data.values():
+            for key, m in (prov.get("models") or {}).items():
+                limit = m.get("limit") or {}
+                cost = m.get("cost") or {}
+                info = {
+                    "context": limit.get("context"),
+                    "output": limit.get("output"),
+                    "cost_in": cost.get("input"),
+                    "cost_out": cost.get("output"),
+                }
+                mid = m.get("id") or key
+                for k in {mid, key}:
+                    exact.setdefault(k, info)
+                base.setdefault(mid.split("/")[-1], []).append(info)
+        self._dev_exact, self._dev_base = exact, base
+        self.root.after(0, self._apply_pricing)
+
+    def _lookup_dev_info(self, mid: str) -> dict | None:
+        if self._dev_exact is None:
+            return None
+        info = self._dev_exact.get(mid)
+        if info is None:
+            base_name = mid.split("/")[-1]
+            candidates = self._dev_base.get(base_name, [])
+            if candidates:
+                with_cost = [c for c in candidates if c.get("cost_in") is not None]
+                pool = with_cost or candidates
+                # 同名模型多家报价时取最低价
+                info = min(pool, key=lambda c: c.get("cost_in") if c.get("cost_in") is not None else float("inf"))
+        return info
+
+    def _apply_pricing(self) -> None:
+        matched = 0
+        for m in self.models:
+            mid = m.get("id", "")
+            info = self._lookup_dev_info(mid)
+            if info:
+                self.price_info[mid] = info
+                matched += 1
+        self._render_rows()
+        total = len(self.models)
+        self.status_lbl.configure(text="价格匹配完成")
+        self.stats_lbl.configure(text=f"共 {total} 个模型 | 价格已匹配 {matched}/{total}（数据来源 models.dev，单位 $/1M tokens）")
+
+    @staticmethod
+    def _fmt_price(info: dict) -> str:
+        ci, co = info.get("cost_in"), info.get("cost_out")
+        if ci is None and co is None:
+            return ""
+        if not ci and not co:
+            return "免费"
+        return f"${ci:.2f}/${co:.2f}"
+
+    @staticmethod
+    def _fmt_tokens(n) -> str:
+        try:
+            n = int(n)
+        except (TypeError, ValueError):
+            return ""
+        if n >= 1_000_000:
+            v = n / 1_000_000
+            return f"{v:.1f}M" if v % 1 else f"{int(v)}M"
+        if n >= 1000:
+            return f"{n / 1000:.0f}K"
+        return str(n)
+
     # ── CSV export ───────────────────────────────────────────────
 
     def export_csv(self) -> None:
@@ -520,12 +804,16 @@ class App:
         try:
             with open(filename, "w", newline="", encoding="utf-8-sig") as f:
                 writer = csv.writer(f)
-                writer.writerow(["id", "object", "created", "created_date", "owned_by", "status", "speed_tok_s"])
+                writer.writerow(["id", "object", "created", "created_date", "owned_by", "status",
+                                 "speed_tok_s", "ttft_s", "price_in_usd_per_1m", "price_out_usd_per_1m",
+                                 "context_tokens", "output_tokens"])
                 for m in self.models:
                     mid = m.get("id", "")
                     ts = m.get("created", 0)
                     d = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S") if ts else ""
                     speed = self.speeds.get(mid)
+                    ttft = self.ttfts.get(mid)
+                    info = self.price_info.get(mid) or {}
                     writer.writerow([
                         mid,
                         m.get("object", ""),
@@ -534,6 +822,11 @@ class App:
                         m.get("owned_by", ""),
                         self.statuses.get(mid, ""),
                         f"{speed:.1f}" if isinstance(speed, float) else "",
+                        f"{ttft:.2f}" if isinstance(ttft, float) and ttft > 0 else "",
+                        info.get("cost_in", "") if info.get("cost_in") is not None else "",
+                        info.get("cost_out", "") if info.get("cost_out") is not None else "",
+                        info.get("context", "") if info.get("context") is not None else "",
+                        info.get("output", "") if info.get("output") is not None else "",
                     ])
             messagebox.showinfo("导出成功", f"已导出 {len(self.models)} 个模型到\n{filename}")
         except OSError as e:
