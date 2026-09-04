@@ -70,9 +70,11 @@ class App:
         self.speeds: dict[str, float] = {}
         self.ttfts: dict[str, float] = {}
         self.price_info: dict[str, dict] = {}
-        self._dev_exact: dict[str, dict] | None = None
-        self._dev_base: dict[str, list[dict]] | None = None
-        self._price_lower: dict[str, object] | None = None
+        self._or_exact: dict[str, dict] | None = None
+        self._or_lower: dict[str, dict] = {}
+        self._md_exact: dict[str, list[dict]] | None = None
+        self._md_base: dict[str, list[dict]] = {}
+        self._md_lower: dict[str, list[dict]] = {}
         self._pricing_source: str = ""
         self._speed_lock = threading.Lock()
 
@@ -721,11 +723,12 @@ class App:
         threading.Thread(target=self._pricing_worker, daemon=True).start()
 
     def _pricing_worker(self) -> None:
-        # 首选 OpenRouter：单一权威口径，每个模型一条标准定价
+        # 双数据源合并：OpenRouter（单一权威口径）优先，models.dev（多服务商）补齐未收录模型
+        or_exact: dict[str, dict] = {}
+        or_loaded = False
         try:
             resp = requests.get(OPENROUTER_URL, headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
             resp.raise_for_status()
-            exact: dict[str, dict] = {}
             suffix: dict[str, list[tuple[str, dict]]] = {}
             for m in resp.json().get("data", []):
                 pricing = m.get("pricing") or {}
@@ -740,77 +743,78 @@ class App:
                     continue
                 info = {"context": m.get("context_length"), "output": top.get("max_completion_tokens"),
                         "cost_in": ci, "cost_out": co}
-                exact[mid] = info
+                or_exact[mid] = info
                 suffix.setdefault(mid.split("/")[-1], []).append((mid, info))
             # 裸 ID（无厂商前缀）匹配时，取 ID 最短的条目（通常是官方/规范收录）
             for name, lst in suffix.items():
                 lst.sort(key=lambda t: (len(t[0]), t[0]))
-                exact.setdefault(name, lst[0][1])
-            # 小写索引：服务商返回的 ID 大小写五花八门（DeepSeek-V4-Flash vs deepseek-v4-flash）
-            lower: dict[str, dict] = {}
-            for k, v in exact.items():
-                lower.setdefault(k.lower(), v)
-            self._dev_exact, self._dev_base, self._price_lower = exact, None, lower
-            self._pricing_source = "OpenRouter"
-            self.root.after(0, self._apply_pricing)
-            return
+                or_exact.setdefault(name, lst[0][1])
+            or_loaded = bool(or_exact)
         except (requests.exceptions.RequestException, ValueError):
-            pass  # OpenRouter 不可达时回退到 models.dev
+            pass
 
+        md_exact: dict[str, list[dict]] = {}
+        md_base: dict[str, list[dict]] = {}
+        md_loaded = False
         try:
             resp = requests.get(MODELS_DEV_URL, headers={"User-Agent": "Mozilla/5.0"}, timeout=60)
             resp.raise_for_status()
-            data = resp.json()
-        except (requests.exceptions.RequestException, ValueError) as e:
-            self.root.after(0, messagebox.showerror, "错误", f"获取价格失败（OpenRouter 和 models.dev 均不可达）:\n{e}")
+            for prov in resp.json().values():
+                for key, m in (prov.get("models") or {}).items():
+                    limit = m.get("limit") or {}
+                    cost = m.get("cost") or {}
+                    info = {
+                        "context": limit.get("context"),
+                        "output": limit.get("output"),
+                        "cost_in": cost.get("input"),
+                        "cost_out": cost.get("output"),
+                    }
+                    mid = m.get("id") or key
+                    for k in {mid, key}:
+                        md_exact.setdefault(k, []).append(info)
+                    md_base.setdefault(mid.split("/")[-1], []).append(info)
+            md_loaded = bool(md_exact)
+        except (requests.exceptions.RequestException, ValueError):
+            pass
+
+        if not or_loaded and not md_loaded:
+            self.root.after(0, messagebox.showerror, "错误", "价格获取失败：OpenRouter 和 models.dev 均不可达\n请检查网络后重试")
             self.root.after(0, lambda: self.status_lbl.configure(text="价格获取失败"))
             return
-        exact_md: dict[str, list[dict]] = {}
-        base: dict[str, list[dict]] = {}
-        for prov in data.values():
-            for key, m in (prov.get("models") or {}).items():
-                limit = m.get("limit") or {}
-                cost = m.get("cost") or {}
-                info = {
-                    "context": limit.get("context"),
-                    "output": limit.get("output"),
-                    "cost_in": cost.get("input"),
-                    "cost_out": cost.get("output"),
-                }
-                mid = m.get("id") or key
-                for k in {mid, key}:
-                    exact_md.setdefault(k, []).append(info)
-                base.setdefault(mid.split("/")[-1], []).append(info)
-        self._dev_exact, self._dev_base = exact_md, base
+
+        self._or_exact = or_exact if or_loaded else None
+        lower: dict[str, dict] = {}
+        for k, v in or_exact.items():
+            lower.setdefault(k.lower(), v)
+        self._or_lower = lower
+        self._md_exact = md_exact if md_loaded else None
+        self._md_base = md_base
         lower_md: dict[str, list[dict]] = {}
-        for k, v in exact_md.items():
+        for k, v in md_exact.items():
             lower_md.setdefault(k.lower(), v)
-        self._price_lower = lower_md
-        self._pricing_source = "models.dev（中位数）"
+        self._md_lower = lower_md
+        self._pricing_source = " + ".join(
+            name for name, ok in (("OpenRouter", or_loaded), ("models.dev", md_loaded)) if ok)
         self.root.after(0, self._apply_pricing)
 
     def _lookup_dev_info(self, mid: str) -> dict | None:
-        if self._dev_exact is None:
-            return None
-        # 精确 → 小写 → 去厂商前缀 → 前缀小写，逐级放宽
-        if self._pricing_source.startswith("OpenRouter"):
-            info = (self._dev_exact.get(mid)
-                    or (self._price_lower or {}).get(mid.lower()))
+        # 第一优先：OpenRouter（精确 → 小写 → 去厂商前缀 → 前缀小写）
+        if self._or_exact is not None:
+            info = self._or_exact.get(mid) or self._or_lower.get(mid.lower())
             if info is None and "/" in mid:
                 bare = mid.split("/")[-1]
-                info = self._dev_exact.get(bare) or (self._price_lower or {}).get(bare.lower())
-            return info
-        # models.dev：同名模型被多家服务商收录时，各字段取中位数，避免随机匹配到偏离值
-        lower_md = self._price_lower or {}
-        candidates = (self._dev_exact.get(mid)
-                      or lower_md.get(mid.lower())
-                      or self._dev_base.get(mid.split("/")[-1], [])
-                      or lower_md.get(mid.split("/")[-1].lower(), []))
-        if not candidates:
-            return None
-        if len(candidates) == 1:
-            return candidates[0]
-        return self._merge_infos(candidates)
+                info = self._or_exact.get(bare) or self._or_lower.get(bare.lower())
+            if info is not None:
+                return info
+        # 第二优先：models.dev（同名多家时取中位数）
+        if self._md_exact is not None:
+            candidates = (self._md_exact.get(mid)
+                          or self._md_lower.get(mid.lower())
+                          or self._md_base.get(mid.split("/")[-1], [])
+                          or self._md_lower.get(mid.split("/")[-1].lower(), []))
+            if candidates:
+                return candidates[0] if len(candidates) == 1 else self._merge_infos(candidates)
+        return None
 
     @staticmethod
     def _merge_infos(candidates: list[dict]) -> dict:
