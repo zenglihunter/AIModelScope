@@ -364,6 +364,7 @@ class App:
             self._render_rows()
             self.status_lbl.configure(text=f"共 {len(self.models)} 个模型")
             self.stats_lbl.configure(text=f"共 {len(self.models)} 个模型 | 可用性未测试")
+            self.fetch_pricing(auto=True)  # 获取模型后自动加载价格
         except requests.exceptions.RequestException as e:
             messagebox.showerror("错误", f"获取模型失败:\n{e}")
             self.status_lbl.configure(text="失败")
@@ -712,12 +713,13 @@ class App:
 
     # ── pricing (models.dev) ─────────────────────────────────────
 
-    def fetch_pricing(self) -> None:
-        if self._dev_exact is not None:
+    def fetch_pricing(self, auto: bool = False) -> None:
+        if self._or_exact is not None or self._md_exact is not None:
             self._apply_pricing()
             return
         if not self.models:
-            messagebox.showwarning("提示", "请先获取模型列表")
+            if not auto:
+                messagebox.showwarning("提示", "请先获取模型列表")
             return
         self.status_lbl.configure(text="获取价格信息中...")
         threading.Thread(target=self._pricing_worker, daemon=True).start()
