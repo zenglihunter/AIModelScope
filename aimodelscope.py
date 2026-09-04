@@ -726,7 +726,7 @@ class App:
             self.root.after(0, messagebox.showerror, "错误", f"获取 models.dev 价格失败:\n{e}")
             self.root.after(0, lambda: self.status_lbl.configure(text="价格获取失败"))
             return
-        exact: dict[str, dict] = {}
+        exact: dict[str, list[dict]] = {}
         base: dict[str, list[dict]] = {}
         for prov in data.values():
             for key, m in (prov.get("models") or {}).items():
@@ -740,24 +740,41 @@ class App:
                 }
                 mid = m.get("id") or key
                 for k in {mid, key}:
-                    exact.setdefault(k, info)
+                    exact.setdefault(k, []).append(info)
                 base.setdefault(mid.split("/")[-1], []).append(info)
         self._dev_exact, self._dev_base = exact, base
         self.root.after(0, self._apply_pricing)
 
     def _lookup_dev_info(self, mid: str) -> dict | None:
+        """同名模型被多家服务商收录时，各字段取中位数，避免随机匹配到偏离值。"""
         if self._dev_exact is None:
             return None
-        info = self._dev_exact.get(mid)
-        if info is None:
-            base_name = mid.split("/")[-1]
-            candidates = self._dev_base.get(base_name, [])
-            if candidates:
-                with_cost = [c for c in candidates if c.get("cost_in") is not None]
-                pool = with_cost or candidates
-                # 同名模型多家报价时取最低价
-                info = min(pool, key=lambda c: c.get("cost_in") if c.get("cost_in") is not None else float("inf"))
-        return info
+        candidates = self._dev_exact.get(mid) or self._dev_base.get(mid.split("/")[-1], [])
+        if not candidates:
+            return None
+        if len(candidates) == 1:
+            return candidates[0]
+        return self._merge_infos(candidates)
+
+    @staticmethod
+    def _merge_infos(candidates: list[dict]) -> dict:
+        def median(field: str, prefer_paid: bool = False):
+            pool = candidates
+            if prefer_paid:
+                paid = [c for c in candidates if c.get(field) is not None and c.get(field) > 0]
+                if paid:
+                    pool = paid  # 免费推广价会拉低中位数，优先统计正常收费条目
+            vals = sorted(v for c in pool if (v := c.get(field)) is not None)
+            if not vals:
+                return None
+            return vals[len(vals) // 2]
+
+        return {
+            "context": median("context"),
+            "output": median("output"),
+            "cost_in": median("cost_in", prefer_paid=True),
+            "cost_out": median("cost_out", prefer_paid=True),
+        }
 
     def _apply_pricing(self) -> None:
         matched = 0
@@ -788,8 +805,8 @@ class App:
         except (TypeError, ValueError):
             return ""
         if n >= 1_000_000:
-            v = n / 1_000_000
-            return f"{v:.1f}M" if v % 1 else f"{int(v)}M"
+            s = f"{n / 1_000_000:.2f}".rstrip("0").rstrip(".")
+            return f"{s}M"
         if n >= 1000:
             return f"{n / 1000:.0f}K"
         return str(n)
