@@ -11,7 +11,7 @@ import customtkinter as ctk
 import requests
 
 APP_NAME = "AIModelScope"
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 
 CONFIG_FILE = "api_configs.json"
 SPEED_TEST_TOKENS = 100
@@ -20,9 +20,9 @@ MODELS_DEV_URL = "https://models.dev/api.json"
 
 FONT_FAMILY = "Microsoft YaHei"
 FONT_UI = lambda size=13, bold=False: ctk.CTkFont(family=FONT_FAMILY, size=size, weight="bold" if bold else "normal")
-FONT_TREE = (FONT_FAMILY, 11)
+FONT_TREE = (FONT_FAMILY, 14)
 
-DEV_INFO = f"{APP_NAME} v{APP_VERSION} | 需求 by Tiger | 开发 by DeepSeek V4 Pro | 更新: 2026-09-04"
+DEV_INFO = f"{APP_NAME} v{APP_VERSION} | 需求 by Tiger | 开发 by DeepSeek V4 Pro | 更新: 2026-09-06"
 
 STATUS_LABELS: dict[str, str] = {
     "ok": "可用的",
@@ -97,8 +97,8 @@ class App:
 
     def _build_ui(self) -> None:
         style = ttk.Style()
-        style.configure("Treeview", font=FONT_TREE)
-        style.configure("Treeview.Heading", font=(FONT_FAMILY, 11, "bold"))
+        style.configure("Treeview", font=FONT_TREE, rowheight=30)
+        style.configure("Treeview.Heading", font=(FONT_FAMILY, 14, "bold"))
 
         # ── top: API config ──
         top = ctk.CTkFrame(self.root)
@@ -119,6 +119,8 @@ class App:
                       fg_color="#27ae60", hover_color="#1e8449", text_color="white").pack(side=tk.LEFT, padx=4)
         ctk.CTkButton(row0, text="删除", width=60, command=self._delete_config, font=FONT_UI(13, True),
                       fg_color="#c0392b", hover_color="#922b21", text_color="white").pack(side=tk.LEFT)
+        ctk.CTkButton(row0, text="保存修改", width=90, command=self._save_config_edit, font=FONT_UI(13, True),
+                      fg_color="#2563eb", hover_color="#1d4ed8", text_color="white").pack(side=tk.LEFT, padx=(10, 0))
 
         row1 = ctk.CTkFrame(top, fg_color="transparent")
         row1.pack(fill=tk.X, padx=10, pady=(8, 0))
@@ -189,15 +191,15 @@ class App:
         self.tree.heading("price", text="价格 $/1M", command=lambda: self._sort_by("price"))
         self.tree.heading("context", text="上下文", command=lambda: self._sort_by("context"))
         self.tree.heading("output", text="输出上限", command=lambda: self._sort_by("output"))
-        self.tree.column("id", width=280)
-        self.tree.column("created_date", width=130, anchor=tk.CENTER)
-        self.tree.column("owned_by", width=80, anchor=tk.CENTER)
-        self.tree.column("status", width=80, anchor=tk.CENTER)
-        self.tree.column("speed", width=90, anchor=tk.CENTER)
-        self.tree.column("ttft", width=70, anchor=tk.CENTER)
-        self.tree.column("price", width=100, anchor=tk.CENTER)
-        self.tree.column("context", width=80, anchor=tk.CENTER)
-        self.tree.column("output", width=80, anchor=tk.CENTER)
+        self.tree.column("id", width=290)
+        self.tree.column("created_date", width=195, anchor=tk.CENTER)
+        self.tree.column("owned_by", width=95, anchor=tk.CENTER)
+        self.tree.column("status", width=90, anchor=tk.CENTER)
+        self.tree.column("speed", width=115, anchor=tk.CENTER)
+        self.tree.column("ttft", width=85, anchor=tk.CENTER)
+        self.tree.column("price", width=125, anchor=tk.CENTER)
+        self.tree.column("context", width=95, anchor=tk.CENTER)
+        self.tree.column("output", width=95, anchor=tk.CENTER)
 
         v_scroll = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.tree.yview)
         h_scroll = ttk.Scrollbar(tree_frame, orient=tk.HORIZONTAL, command=self.tree.xview)
@@ -327,6 +329,23 @@ class App:
         save_configs(self.configs)
         self._refresh_dropdown()
         self._select_config(min(idx, len(self.configs) - 1))
+
+    def _save_config_edit(self) -> None:
+        idx = self._current_config_index()
+        if idx < 0:
+            messagebox.showwarning("提示", "请先在下拉框中选择要修改的配置")
+            return
+        url = self.url_var.get().strip()
+        key = self.key_var.get().strip()
+        if not url or not key:
+            messagebox.showwarning("提示", "URL 和 Key 不能为空")
+            return
+        self.configs[idx]["url"] = url
+        self.configs[idx]["key"] = key
+        save_configs(self.configs)
+        self._refresh_dropdown()
+        self._select_config(idx)
+        messagebox.showinfo("保存成功", f"配置 \"{self.configs[idx]['name']}\" 已更新")
 
     def _current_config_index(self) -> int:
         choice = self.cfg_var.get()
