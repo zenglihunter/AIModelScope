@@ -1,6 +1,6 @@
 # AIModelScope
 
-**当前版本：v1.1.0** · [更新日志](CHANGELOG.md)
+**当前版本：v1.2.0** · [更新日志](CHANGELOG.md)
 
 [English](#english) | [中文](#chinese)
 
@@ -20,7 +20,7 @@
 - **Filter & Search** — Filter by model ID / provider keyword, or show available models only
 - **Pricing & Limits** — Auto-fetch price (USD/1M tokens), context window and max output from OpenRouter (with models.dev fallback)
 - **CSV Export** — Export model list with status, speed, TTFT and pricing data
-- **API Config Management** — Save multiple API configurations securely on your local machine
+- **API Config Management** — Save multiple API configurations on your local machine, edit and update them anytime
 - **Sort & Filter** — Click column headers to sort ascending/descending
 
 ### 🔒 Privacy & Security
@@ -81,7 +81,7 @@ MIT License - see [LICENSE](LICENSE) file.
 - **过滤与搜索** — 按模型 ID / 来源关键词过滤，或只看可用模型
 - **价格与规格** — 自动获取模型价格（$/1M tokens）、上下文长度、输出上限（数据源 OpenRouter，models.dev 补充）
 - **导出 CSV** — 导出含状态、速度、首 token 延迟、价格数据的模型列表
-- **API 配置管理** — 安全保存多个 API 配置在本地电脑
+- **API 配置管理** — 安全保存多个 API 配置在本地电脑，支持随时修改并保存
 - **排序** — 点击表头可升序/降序排列
 
 ### 🔒 隐私与安全
